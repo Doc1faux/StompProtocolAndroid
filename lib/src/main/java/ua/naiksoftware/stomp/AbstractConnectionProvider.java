@@ -4,8 +4,11 @@ import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.util.Log;
 
+import java.util.concurrent.Callable;
+
 import io.reactivex.Completable;
 import io.reactivex.Observable;
+import io.reactivex.functions.Action;
 import io.reactivex.subjects.PublishSubject;
 
 /**
@@ -31,7 +34,7 @@ abstract class AbstractConnectionProvider implements ConnectionProvider {
     @NonNull
     @Override
     public Observable<String> messages() {
-        return mMessagesStream.startWith(initSocket().toObservable());
+        return mMessagesStream.startWith(initSocket().<String> toObservable());
     }
 
     /**
@@ -45,14 +48,28 @@ abstract class AbstractConnectionProvider implements ConnectionProvider {
     abstract void rawDisconnect();
 
     @Override
-    public Completable disconnect() {
-        return Completable
-                .fromAction(this::rawDisconnect);
+    public Completable disconnect()
+    {
+        return Completable.fromAction(new Action()
+        {
+            @Override
+            public void run()
+            {
+                rawDisconnect();
+            }
+        });
     }
 
-    private Completable initSocket() {
-        return Completable
-                .fromAction(this::createWebSocketConnection);
+    private Completable initSocket()
+    {
+        return Completable.fromAction(new Action()
+        {
+            @Override
+            public void run()
+            {
+                createWebSocketConnection();
+            }
+        });
     }
 
     // Doesn't do anything at all, only here as a stub
@@ -69,14 +86,23 @@ abstract class AbstractConnectionProvider implements ConnectionProvider {
 
     @NonNull
     @Override
-    public Completable send(String stompMessage) {
-        return Completable.fromCallable(() -> {
-            if (getSocket() == null) {
-                throw new IllegalStateException("Not connected yet");
-            } else {
-                Log.d(TAG, "Send STOMP message: " + stompMessage);
-                rawSend(stompMessage);
-                return null;
+    public Completable send(final String stompMessage)
+    {
+        return Completable.fromCallable(new Callable<Object>()
+        {
+            @Override
+            public Object call() throws Exception
+            {
+                if (getSocket() == null)
+                {
+                    throw new IllegalStateException("Not connected yet");
+                }
+                else
+                {
+                    Log.d(TAG, "Send STOMP message: " + stompMessage);
+                    rawSend(stompMessage);
+                    return null;
+                }
             }
         });
     }

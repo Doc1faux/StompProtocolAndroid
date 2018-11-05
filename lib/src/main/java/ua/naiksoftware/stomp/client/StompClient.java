@@ -4,6 +4,8 @@ import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.util.Log;
 
+import org.reactivestreams.Subscription;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -15,6 +17,10 @@ import io.reactivex.Completable;
 import io.reactivex.CompletableSource;
 import io.reactivex.Flowable;
 import io.reactivex.disposables.Disposable;
+import io.reactivex.functions.Action;
+import io.reactivex.functions.Consumer;
+import io.reactivex.functions.Function;
+import io.reactivex.functions.Predicate;
 import io.reactivex.subjects.BehaviorSubject;
 import io.reactivex.subjects.PublishSubject;
 import ua.naiksoftware.stomp.ConnectionProvider;
@@ -99,7 +105,7 @@ public class StompClient {
      *
      * @param _headers HTTP headers to send in the INITIAL REQUEST, i.e. during the protocol upgrade
      */
-    public void connect(@Nullable List<StompHeader> _headers) {
+    public void connect(@Nullable final List<StompHeader> _headers) {
 
         Log.d(TAG, "Connect");
 
@@ -109,41 +115,70 @@ public class StompClient {
             Log.d(TAG, "Already connected, ignore");
             return;
         }
+        
         mLifecycleDisposable = mConnectionProvider.lifecycle()
-                .subscribe(lifecycleEvent -> {
-                    switch (lifecycleEvent.getType()) {
-                        case OPENED:
-                            List<StompHeader> headers = new ArrayList<>();
-                            headers.add(new StompHeader(StompHeader.VERSION, SUPPORTED_VERSIONS));
-                            headers.add(new StompHeader(StompHeader.HEART_BEAT, "0," + heartbeat));
-                            if (_headers != null) headers.addAll(_headers);
-                            mConnectionProvider.send(new StompMessage(StompCommand.CONNECT, headers, null).compile(legacyWhitespace))
-                                    .subscribe();
-                            break;
-
-                        case CLOSED:
-                            Log.d(TAG, "Socket closed");
-                            setConnected(false);
-                            isConnecting = false;
-                            break;
-
-                        case ERROR:
-                            Log.d(TAG, "Socket closed with error");
-                            setConnected(false);
-                            isConnecting = false;
-                            break;
+                                                  .subscribe(new Consumer<LifecycleEvent>()
+                {
+                    @Override
+                    public void accept(LifecycleEvent lifecycleEvent)
+                    {
+                        switch (lifecycleEvent.getType()) {
+                            case OPENED:
+                                List<StompHeader> headers = new ArrayList<>();
+                                headers.add(new StompHeader(StompHeader.VERSION, SUPPORTED_VERSIONS));
+                                headers.add(new StompHeader(StompHeader.HEART_BEAT, "0," + heartbeat));
+                                if (_headers != null) headers.addAll(_headers);
+                                mConnectionProvider.send(new StompMessage(StompCommand.CONNECT, headers, null).compile(legacyWhitespace))
+                                                   .subscribe();
+                                break;
+                            case ERROR:
+                                Log.d(TAG, "Socket closed with error");
+                                setConnected(false);
+                                isConnecting = false;
+                                break;
+                            case CLOSED:
+                                Log.d(TAG, "Socket closed");
+                                setConnected(false);
+                                isConnecting = false;
+                                break;
+                        }
                     }
                 });
 
         isConnecting = true;
         mMessagesDisposable = mConnectionProvider.messages()
-                .map(StompMessage::from)
-                .doOnNext(this::callSubscribers)
-                .filter(msg -> msg.getStompCommand().equals(StompCommand.CONNECTED))
-                .subscribe(stompMessage -> {
-                    setConnected(true);
-                    isConnecting = false;
-
+                .map(new Function<String, StompMessage>()
+                {
+                    @Override
+                    public StompMessage apply(String message)
+                    {
+                        return StompMessage.from(message);
+                    }
+                })
+                .doOnNext(new Consumer<StompMessage>()
+                {
+                    @Override
+                    public void accept(StompMessage stompMessage)
+                    {
+                        callSubscribers(stompMessage);
+                    }
+                })
+                .filter(new Predicate<StompMessage>()
+                        {
+                            @Override
+                            public boolean test(StompMessage msg)
+                            {
+                                return msg.getStompCommand().equals(StompCommand.CONNECTED);
+                            }
+                        })
+                .subscribe(new Consumer<StompMessage>()
+                {
+                    @Override
+                    public void accept(StompMessage stompMessage)
+                    {
+                        setConnected(true);
+                        isConnecting = false;
+                    }
                 });
     }
 
@@ -156,9 +191,23 @@ public class StompClient {
      * Disconnect from server, and then reconnect with the last-used headers
      */
     public void reconnect() {
-        disconnectCompletable()
-                .subscribe(() -> connect(mHeaders),
-                        e -> Log.e(tag, "Disconnect error", e));
+        
+        disconnectCompletable().subscribe(new Action()
+                                          {
+                                              @Override
+                                              public void run()
+                                              {
+                                                  connect(mHeaders);
+                                              }
+                                          },
+                                          new Consumer<Throwable>()
+                                          {
+                                              @Override
+                                              public void accept(Throwable e)
+                                              {
+                                                  Log.e(tag, "Disconnect error", e);
+                                              }
+                                          });
     }
 
     public Completable send(String destination) {
@@ -175,7 +224,14 @@ public class StompClient {
     public Completable send(@NonNull StompMessage stompMessage) {
         Completable completable = mConnectionProvider.send(stompMessage.compile(legacyWhitespace));
         CompletableSource connectionComplete = mConnectionStream
-                .filter(isConnected -> isConnected)
+                .filter(new Predicate<Boolean>()
+                {
+                    @Override
+                    public boolean test(Boolean isConnected)
+                    {
+                        return isConnected;
+                    }
+                })
                 .firstOrError().toCompletable();
         return completable
                 .startWith(connectionComplete);
@@ -190,7 +246,19 @@ public class StompClient {
     }
 
     public void disconnect() {
-        disconnectCompletable().subscribe(() -> {}, e -> Log.e(tag, "Disconnect error", e));
+        disconnectCompletable().subscribe(new Action()
+                                          {
+                                              @Override
+                                              public void run() { }
+                                          },
+                                          new Consumer<Throwable>()
+                                          {
+                                              @Override
+                                              public void accept(Throwable e)
+                                              {
+                                                  Log.e(tag, "Disconnect error", e);
+                                              }
+                                          });
     }
 
     public Completable disconnectCompletable() {
@@ -201,25 +269,57 @@ public class StompClient {
             mMessagesDisposable.dispose();
         }
         return mConnectionProvider.disconnect()
-                .doOnComplete(() -> setConnected(false));
+                .doOnComplete(new Action()
+                {
+                    @Override
+                    public void run()
+                    {
+                        setConnected(false);
+                    }
+                });
     }
 
     public Flowable<StompMessage> topic(String destinationPath) {
         return topic(destinationPath, null);
     }
 
-    public Flowable<StompMessage> topic(@NonNull String destPath, List<StompHeader> headerList) {
+    public Flowable<StompMessage> topic(@NonNull final String destPath,
+            final List<StompHeader> headerList)
+    {
         if (destPath == null)
+        {
             return Flowable.error(new IllegalArgumentException("Topic path cannot be null"));
-        else if (!mStreamMap.containsKey(destPath))
-            mStreamMap.put(destPath,
-                    mMessageStream
-                            .filter(msg -> matches(destPath, msg))
-                            .toFlowable(BackpressureStrategy.BUFFER)
-                            .doOnSubscribe(disposable -> subscribePath(destPath, headerList).subscribe())
-                            .doFinally(() -> unsubscribePath(destPath).subscribe())
-                            .share()
-            );
+        }
+        else if (! mStreamMap.containsKey(destPath))
+        {
+            mStreamMap.put(destPath, mMessageStream.filter(new Predicate<StompMessage>()
+                                                    {
+                                                        @Override
+                                                        public boolean test(StompMessage msg)
+                                                        {
+                                                            return matches(destPath, msg);
+                                                        }
+                                                    })
+                                                   .toFlowable(BackpressureStrategy.BUFFER)
+                                                   .doOnSubscribe(new Consumer<Subscription>() {
+                                                       @Override
+                                                       public void accept(Subscription disposable)
+                                                       {
+                                                           subscribePath(destPath,
+                                                                         headerList).subscribe();
+                                                       }
+                                                   })
+                                                   .doFinally(new Action()
+                                                   {
+                                                       @Override
+                                                       public void run()
+                                                       {
+                                                           unsubscribePath(destPath).subscribe();
+                                                       }
+                                                   })
+                                                   .share());
+        }
+        
         return mStreamMap.get(destPath);
     }
 

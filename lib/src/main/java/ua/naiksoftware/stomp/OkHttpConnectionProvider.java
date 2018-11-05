@@ -31,7 +31,7 @@ class OkHttpConnectionProvider extends AbstractConnectionProvider {
     OkHttpConnectionProvider(String uri, @Nullable Map<String, String> connectHttpHeaders, OkHttpClient okHttpClient) {
         super();
         mUri = uri;
-        mConnectHttpHeaders = connectHttpHeaders != null ? connectHttpHeaders : new HashMap<>();
+        mConnectHttpHeaders = connectHttpHeaders != null ? connectHttpHeaders : new HashMap<String, String>();
         mOkHttpClient = okHttpClient;
     }
 

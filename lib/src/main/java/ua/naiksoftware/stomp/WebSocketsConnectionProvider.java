@@ -43,7 +43,7 @@ class WebSocketsConnectionProvider extends AbstractConnectionProvider {
      */
     WebSocketsConnectionProvider(String uri, @Nullable Map<String, String> connectHttpHeaders) {
         mUri = uri;
-        mConnectHttpHeaders = connectHttpHeaders != null ? connectHttpHeaders : new HashMap<>();
+        mConnectHttpHeaders = connectHttpHeaders != null ? connectHttpHeaders : new HashMap<String, String>();
     }
 
     @Override

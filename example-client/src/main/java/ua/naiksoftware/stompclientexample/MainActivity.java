@@ -17,12 +17,18 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
+import io.reactivex.Completable;
+import io.reactivex.CompletableSource;
 import io.reactivex.CompletableTransformer;
 import io.reactivex.android.schedulers.AndroidSchedulers;
 import io.reactivex.disposables.Disposable;
+import io.reactivex.functions.Action;
+import io.reactivex.functions.Consumer;
 import io.reactivex.schedulers.Schedulers;
+import ua.naiksoftware.stomp.LifecycleEvent;
 import ua.naiksoftware.stomp.Stomp;
 import ua.naiksoftware.stomp.client.StompClient;
+import ua.naiksoftware.stomp.client.StompMessage;
 
 import static ua.naiksoftware.stompclientexample.RestClient.ANDROID_EMULATOR_LOCALHOST;
 
@@ -56,31 +62,41 @@ public class MainActivity extends AppCompatActivity {
     public void connectStomp(View view) {
         mStompClient = Stomp.over(Stomp.ConnectionProvider.JWS, "ws://" + ANDROID_EMULATOR_LOCALHOST
                 + ":" + RestClient.SERVER_PORT + "/example-endpoint/websocket");
-
         mStompClient.lifecycle()
                 .subscribeOn(Schedulers.io())
                 .observeOn(AndroidSchedulers.mainThread())
-                .subscribe(lifecycleEvent -> {
-                    switch (lifecycleEvent.getType()) {
-                        case OPENED:
-                            toast("Stomp connection opened");
-                            break;
-                        case ERROR:
-                            Log.e(TAG, "Stomp connection error", lifecycleEvent.getException());
-                            toast("Stomp connection error");
-                            break;
-                        case CLOSED:
-                            toast("Stomp connection closed");
+                .subscribe(new Consumer<LifecycleEvent>()
+                {
+                    @Override
+                    public void accept(LifecycleEvent lifecycleEvent)
+                    {
+                        switch (lifecycleEvent.getType()) {
+                            case OPENED:
+                                toast("Stomp connection opened");
+                                break;
+                            case ERROR:
+                                Log.e(TAG, "Stomp connection error", lifecycleEvent.getException());
+                                toast("Stomp connection error");
+    
+                                break;
+                            case CLOSED:
+                                toast("Stomp connection closed");
+                                break;
+                        }
                     }
                 });
-
         // Receive greetings
         mStompClient.topic("/topic/greetings")
                 .subscribeOn(Schedulers.io())
                 .observeOn(AndroidSchedulers.mainThread())
-                .subscribe(topicMessage -> {
-                    Log.d(TAG, "Received " + topicMessage.getPayload());
-                    addItem(mGson.fromJson(topicMessage.getPayload(), EchoModel.class));
+                .subscribe(new Consumer<StompMessage>()
+                {
+                    @Override
+                    public void accept(StompMessage topicMessage)
+                    {
+                        Log.d(TAG, "Received " + topicMessage.getPayload());
+                        addItem(mGson.fromJson(topicMessage.getPayload(), EchoModel.class));
+                    }
                 });
 
         mStompClient.connect();
@@ -89,24 +105,47 @@ public class MainActivity extends AppCompatActivity {
     public void sendEchoViaStomp(View v) {
         mStompClient.send("/topic/hello-msg-mapping", "Echo STOMP " + mTimeFormat.format(new Date()))
                 .compose(applySchedulers())
-                .subscribe(() -> {
-                    Log.d(TAG, "STOMP echo send successfully");
-                }, throwable -> {
-                    Log.e(TAG, "Error send STOMP echo", throwable);
-                    toast(throwable.getMessage());
-                });
+                .subscribe(new Action()
+                           {
+                               @Override
+                               public void run()
+                               {
+                                   Log.d(TAG, "STOMP echo send successfully");
+                               }
+                           },
+                           new Consumer<Throwable>()
+                           {
+                               @Override
+                               public void accept(Throwable throwable)
+                               {
+                                   Log.e(TAG, "Error send STOMP echo", throwable);
+                                   toast(throwable.getMessage());
+                               }
+                           }
+                );
     }
 
     public void sendEchoViaRest(View v) {
         mRestPingDisposable = RestClient.getInstance().getExampleRepository()
                 .sendRestEcho("Echo REST " + mTimeFormat.format(new Date()))
                 .compose(applySchedulers())
-                .subscribe(() -> {
-                    Log.d(TAG, "REST echo send successfully");
-                }, throwable -> {
-                    Log.e(TAG, "Error send REST echo", throwable);
-                    toast(throwable.getMessage());
-                });
+                .subscribe(new Action()
+                           {
+                               @Override
+                               public void run()
+                               {
+                                   Log.d(TAG, "REST echo send successfully");
+                               }
+                           },
+                           new Consumer<Throwable>()
+                           {
+                               @Override
+                               public void accept(Throwable throwable)
+                               {
+                                   Log.e(TAG, "Error send REST echo", throwable);
+                                   toast(throwable.getMessage());
+                               }
+                           });
     }
 
     private void addItem(EchoModel echoModel) {
@@ -120,11 +159,18 @@ public class MainActivity extends AppCompatActivity {
         Toast.makeText(this, text, Toast.LENGTH_SHORT).show();
     }
 
-    protected CompletableTransformer applySchedulers() {
-        return upstream -> upstream
-                .unsubscribeOn(Schedulers.newThread())
-                .subscribeOn(Schedulers.io())
-                .observeOn(AndroidSchedulers.mainThread());
+    protected CompletableTransformer applySchedulers()
+    {
+        return new CompletableTransformer()
+        {
+            @Override
+            public CompletableSource apply(Completable upstream)
+            {
+                return upstream.unsubscribeOn(Schedulers.newThread())
+                               .subscribeOn(Schedulers.io())
+                               .observeOn(AndroidSchedulers.mainThread());
+            }
+        };
     }
 
     @Override
